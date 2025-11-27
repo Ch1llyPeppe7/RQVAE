@@ -1,0 +1,16 @@
+dataset/
+__pycache__
+
+out
+wandb
+trained_models/transformer*
+tl_out
+__pycache__/
+*.pyc
+*.ckpt
+*.log
+*.pth
+.env
+*.zip
+.DS_Store
+*.pt
