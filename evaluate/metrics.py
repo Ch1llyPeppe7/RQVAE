@@ -1,0 +1,67 @@
+from collections import defaultdict
+from einops import rearrange
+from torch import Tensor
+
+
+class TopKAccumulator:
+    def __init__(self, ks=[1, 5, 10]):
+        self.ks = ks
+        self.reset()
+
+    def reset(self):
+        self.total = 0
+        self.metrics = defaultdict(int)
+
+    def accumulate(self, actual: Tensor, top_k: Tensor) -> None:
+        B, D = actual.shape
+        pos_match = (rearrange(actual, "b d -> b 1 d") == top_k)
+        for i in range(D):
+            match_found, rank = pos_match[...,:i+1].all(axis=-1).max(axis=-1)
+            matched_rank = rank[match_found]
+            for k in self.ks:
+                self.metrics[f"h@{k}_slice_:{i+1}"] += len(matched_rank[matched_rank < k])
+            
+            match_found, rank = pos_match[...,i:i+1].all(axis=-1).max(axis=-1)
+            matched_rank = rank[match_found]
+            for k in self.ks:
+                self.metrics[f"h@{k}_pos_{i}"] += len(matched_rank[matched_rank < k])
+        self.total += B
+        
+    def reduce(self) -> dict:
+        return {k: v/self.total for k, v in self.metrics.items()}
+
+class RecMetricsAccumulator:
+    def __init__(self, ks=[5,10,20]):
+        self.ks = ks
+        self.reset()
+
+    def reset(self):
+        self.hits = defaultdict(list)
+        self.ndcgs = defaultdict(list)
+
+    def accumulate(self, true_item, ranked_items):
+        """
+        true_item: int 
+        ranked_items: list[int]  # decoder->code->item 排序后的列表
+        """
+        for k in self.ks:
+            self.hits[f"hit@{k}"].append(self._hit_rate(true_item, ranked_items, k))
+            self.ndcgs[f"ndcg@{k}"].append(self._ndcg(true_item, ranked_items, k))
+
+    def reduce(self):
+        out = {}
+        for k in self.ks:
+            out[f"hit@{k}"] = float(np.mean(self.hits[f"hit@{k}"]))
+            out[f"ndcg@{k}"] = float(np.mean(self.ndcgs[f"ndcg@{k}"]))
+        return out
+
+    @staticmethod
+    def _hit_rate(true_item, ranked_items, k):
+        return 1.0 if true_item in ranked_items[:k] else 0.0
+
+    @staticmethod
+    def _ndcg(true_item, ranked_items, k):
+        for idx, item in enumerate(ranked_items[:k]):
+            if item == true_item:
+                return 1.0 / np.log2(idx + 2)
+        return 0.0
